@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dynamic Tikkun</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="toolbar" aria-label="Display controls">
+        <h1>תיקון אינטראקטיבי</h1>
+
+        <div class="controls">
+          <button id="toggleChumash" class="button" aria-pressed="true">הסתר חומש</button>
+
+          <fieldset class="mode-group" aria-label="Scroll display mode">
+            <legend>תצוגת טקסט ספר תורה</legend>
+            <label><input type="radio" name="scrollMode" value="plain" checked /> רגיל</label>
+            <label><input type="radio" name="scrollMode" value="trop" /> טעמים</label>
+            <label><input type="radio" name="scrollMode" value="nikkud" /> ניקוד</label>
+          </fieldset>
+
+          <div class="nav-group" aria-label="Torah navigation">
+            <label>ספר
+              <select id="bookSelect"></select>
+            </label>
+            <button id="prevAmud" class="button" type="button">עמוד קודם</button>
+            <button id="nextAmud" class="button" type="button">עמוד הבא</button>
+          </div>
+
+          <div class="nav-group" aria-label="Parsha navigation">
+            <label>פרשה
+              <select id="parshaSelect"></select>
+            </label>
+            <label>עליה
+              <select id="aliyaSelect"></select>
+            </label>
+            <span id="loadingSpinner" class="spinner" aria-hidden="true" hidden></span>
+          </div>
+
+          <div class="nav-group" aria-label="Maftir source settings">
+            <label>תאריך קריאה
+              <input id="readingDateInput" type="date" />
+            </label>
+            <label>מנהג
+              <select id="scheduleSelect">
+                <option value="diaspora" selected>חו״ל</option>
+                <option value="israel">ישראל</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="statusLine" class="status-line" aria-live="polite"></div>
+        </div>
+      </header>
+
+      <main id="panes" class="panes two-up">
+        <section id="chumashPane" class="pane" aria-label="Chumash">
+          <h2>חומש</h2>
+          <p id="chumashText" class="text-block"></p>
+        </section>
+
+        <section id="scrollPane" class="pane" aria-label="Torah scroll style text">
+          <h2>ספר תורה</h2>
+          <p id="scrollText" class="text-block torah-scroll-text"></p>
+        </section>
+      </main>
+    </div>
+
+    <script src="parsha-data.js"></script>
+    <script src="maftir-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

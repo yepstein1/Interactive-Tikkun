@@ -23,7 +23,7 @@ const torahBooks = [
   { he: "דברים", api: "Deuteronomy" },
 ];
 
-const versesPerAmud = 8;
+const LINES_PER_AMUD = 42;
 
 const state = {
   chumashVisible: true,
@@ -31,6 +31,7 @@ const state = {
   bookIndex: 0,
   amudIndex: 0,
   verses: [],
+  lines: [],
   isLoading: false,
   error: "",
   parshaIndex: 0,
@@ -50,14 +51,14 @@ const ranges = {
     [0x05c4, 0x05c5],
     [0x05c7, 0x05c7],
   ],
-  trop: [[0x0591, 0x05af]],
+  trop: [[0x0591, 0x05af], [0x05c0, 0x05c0]],
 };
 
 const toggleButton = document.getElementById("toggleChumash");
-const chumashPane = document.getElementById("chumashPane");
+const chumashHead = document.getElementById("chumashHead");
+const chumashBody = document.getElementById("chumashBody");
+const scrollBody = document.getElementById("scrollBody");
 const panes = document.getElementById("panes");
-const chumashTextEl = document.getElementById("chumashText");
-const scrollTextEl = document.getElementById("scrollText");
 const modeInputs = document.querySelectorAll('input[name="scrollMode"]');
 const bookSelect = document.getElementById("bookSelect");
 const prevAmudButton = document.getElementById("prevAmud");
@@ -323,6 +324,7 @@ async function activateAliyaMode(parshaIndex, aliyaIndex) {
     const verses = await loadAliyaText(refs[safeAliyaIndex]);
     state.verses = verses;
     state.amudIndex = 0;
+    computeLines();
   } catch (err) {
     state.error = err instanceof Error ? err.message : "שגיאה בטעינת הפרשה.";
     state.verses = ["לא ניתן לטעון עלייה כרגע."];
@@ -380,18 +382,107 @@ function buildBookOptions() {
   });
 }
 
-function getCurrentAmudText() {
-  const start = state.amudIndex * versesPerAmud;
-  const end = start + versesPerAmud;
-  const slice = state.verses.slice(start, end);
-  return slice.join("\n");
+// ── Amud line-breaking ────────────────────────────────────────────────────
+
+// Measurement span for scroll column — used only for line-breaking decisions (not word-spacing,
+// which is now handled by CSS text-align-last:justify).
+const _scrollMeasureSpan = (() => {
+  const el = document.createElement("div");
+  el.style.cssText =
+    "position:fixed;top:-9999px;left:-9999px;" +
+    "display:inline-block;white-space:nowrap;width:auto;height:auto;overflow:visible;" +
+    "direction:rtl;" +
+    "font-family:'SeferSTaM','Noto Rashi Hebrew','Frank Ruhl Libre','David Libre','Times New Roman',serif;" +
+    "font-weight:700;letter-spacing:0.015em;font-size:clamp(1.5rem,2.5vw,2.25rem);";
+  document.body.appendChild(el);
+  return el;
+})();
+
+function measureStr(text) {
+  if (!text) return 0;
+  _scrollMeasureSpan.textContent = text;
+  return _scrollMeasureSpan.getBoundingClientRect().width;
+}
+
+function getScrollColumnWidth() {
+  const rect = scrollBody.getBoundingClientRect();
+  if (rect.width > 0) return rect.width - 32;
+  const pr = panes.getBoundingClientRect();
+  if (pr.width > 0) return (pr.width - 16) / 2 - 32;
+  return 450;
+}
+
+// Greedy line-breaker using full-string DOM measurement for every candidate line.
+// Measuring the full candidate string is accurate because Hebrew letter widths vary
+// greatly (ו ≈ half the width of מ) and full strings get correct font shaping.
+// Word-spacing / justification is handled by CSS text-align-last:justify, not JS.
+function breakVersesToLines(verses) {
+  const maxWidth = getScrollColumnWidth();
+  const allLines = [];
+
+  // cwLine/swLine are shared across verse boundaries — in a real Sefer Torah,
+  // words from consecutive verses share lines (no forced break at verse end).
+  let cwLine = [], swLine = [];
+
+  function flushLine(type) {
+    if (cwLine.length === 0) return;
+    allLines.push({ chumash: cwLine.join(" "), scroll: swLine.join(" "), type });
+    cwLine = []; swLine = [];
+  }
+
+  for (const verse of verses) {
+    // Split verse on parasha markers, keeping them as tokens
+    const parts = verse.split(/(\{[פס]\})/);
+
+    for (const part of parts) {
+      const markerMatch = part.match(/^\{([פס])\}$/);
+      if (markerMatch) {
+        const type = markerMatch[1] === "פ" ? "petuchah" : "setumah";
+        flushLine(type);
+        if (type === "petuchah") {
+          allLines.push({ chumash: "", scroll: "", type: "petuchah-spacer" });
+        }
+        continue;
+      }
+
+      const scrollPart = filterHebrewMarks(part, state.scrollMode);
+      const cw = part.split(" ").filter(Boolean);
+      const sw = scrollPart.split(" ").filter(Boolean);
+
+      for (let i = 0; i < cw.length; i++) {
+        const word = sw[i] || "";
+        if (swLine.length === 0) {
+          cwLine.push(cw[i]); swLine.push(word);
+        } else {
+          const candidate = swLine.join(" ") + " " + word;
+          if (measureStr(candidate) <= maxWidth) {
+            cwLine.push(cw[i]); swLine.push(word);
+          } else {
+            flushLine("normal");
+            cwLine.push(cw[i]); swLine.push(word);
+          }
+        }
+      }
+    }
+    // No flush here — words from the next verse continue on the same line
+  }
+
+  flushLine("normal"); // flush whatever remains after the last verse
+  return allLines;
+}
+
+function computeLines() {
+  state.lines = state.verses.length > 0 ? breakVersesToLines(state.verses) : [];
+}
+
+function totalAmudim() {
+  return Math.max(1, Math.ceil(state.lines.length / LINES_PER_AMUD));
 }
 
 function updateStatus() {
   if (state.isLoading) { statusLine.textContent = "טוען..."; return; }
   if (state.error)      { statusLine.textContent = state.error; return; }
 
-  const totalAmudim = Math.max(1, Math.ceil(state.verses.length / versesPerAmud));
   const parsha = PARSHAS[state.parshaIndex];
   const aliyaLabel = ALIYA_LABELS[state.aliyaIndex] || `${state.aliyaIndex + 1}`;
   const maftirSourceText = state.maftirSource === "hebcal-date"
@@ -403,15 +494,16 @@ function updateStatus() {
         : "";
   const isMaftirSelected = aliyaLabel === "מפטיר";
   const sourceSegment = isMaftirSelected && maftirSourceText ? ` · מקור מפטיר: ${maftirSourceText}` : "";
+  const total = totalAmudim();
 
-  statusLine.textContent = `פרשת ${parsha.he} · עלייה ${aliyaLabel}${totalAmudim > 1 ? ` · עמוד ${state.amudIndex + 1}/${totalAmudim}` : ""}${sourceSegment}`;
+  statusLine.textContent = `פרשת ${parsha.he} · עלייה ${aliyaLabel}${total > 1 ? ` · עמוד ${state.amudIndex + 1}/${total}` : ""}${sourceSegment}`;
 }
 
 function updateNavButtons() {
-  const totalAmudim = Math.max(1, Math.ceil(state.verses.length / versesPerAmud));
+  const total = totalAmudim();
 
   const hasPrevAmud = state.amudIndex > 0;
-  const hasNextAmud = state.amudIndex < totalAmudim - 1;
+  const hasNextAmud = state.amudIndex < total - 1;
   const hasPrevAliya = state.aliyaIndex > 0 || state.parshaIndex > 0;
   const hasNextAliya = state.aliyaIndex < state.aliyaRefs.length - 1 || state.parshaIndex < PARSHAS.length - 1;
 
@@ -422,18 +514,57 @@ function updateNavButtons() {
 }
 
 function render() {
-  const currentAmudText = getCurrentAmudText();
-  chumashTextEl.textContent = currentAmudText;
-  scrollTextEl.textContent = filterHebrewMarks(currentAmudText, state.scrollMode);
+  if (!state.isLoading && state.verses.length > 0 && state.lines.length === 0) {
+    computeLines();
+  }
+
+  const startLine = state.amudIndex * LINES_PER_AMUD;
+  const currentLines = state.lines.slice(startLine, startLine + LINES_PER_AMUD);
+
+  chumashBody.innerHTML = "";
+  scrollBody.innerHTML = "";
+
+  currentLines.forEach(({ chumash, scroll, type }) => {
+    if (type === "petuchah-spacer") {
+      chumashBody.appendChild(Object.assign(document.createElement("div"), { className: "petuchah-spacer" }));
+      scrollBody.appendChild(Object.assign(document.createElement("div"), { className: "petuchah-spacer" }));
+      return;
+    }
+
+    // CSS text-align-last:justify handles filling; add type as class so petuchah/setumah
+    // lines get text-align-last:right (intentionally short) via stylesheet.
+    const lineClass = type === "normal" ? "text-line" : `text-line ${type}`;
+
+    const cd = document.createElement("div");
+    cd.className = lineClass;
+    if (type === "petuchah" || type === "setumah") {
+      const marker = type === "petuchah" ? "פ" : "ס";
+      cd.textContent = chumash + " ";
+      const span = document.createElement("span");
+      span.className = "parsha-marker";
+      span.textContent = `{${marker}}`;
+      cd.appendChild(span);
+    } else {
+      cd.textContent = chumash;
+    }
+    chumashBody.appendChild(cd);
+
+    const sd = document.createElement("div");
+    sd.className = lineClass;
+    sd.textContent = scroll;
+    scrollBody.appendChild(sd);
+  });
 
   if (state.chumashVisible) {
-    chumashPane.hidden = false;
+    chumashHead.hidden = false;
+    chumashBody.hidden = false;
     panes.classList.add("two-up");
     panes.classList.remove("single");
     toggleButton.textContent = "הסתר חומש";
     toggleButton.setAttribute("aria-pressed", "true");
   } else {
-    chumashPane.hidden = true;
+    chumashHead.hidden = true;
+    chumashBody.hidden = true;
     panes.classList.remove("two-up");
     panes.classList.add("single");
     toggleButton.textContent = "הצג חומש";
@@ -472,9 +603,7 @@ async function goToPreviousAmud() {
 }
 
 async function goToNextAmud() {
-  const totalAmudim = Math.max(1, Math.ceil(state.verses.length / versesPerAmud));
-
-  if (state.amudIndex < totalAmudim - 1) {
+  if (state.amudIndex < totalAmudim() - 1) {
     state.amudIndex += 1;
     render();
     return;
@@ -502,6 +631,7 @@ toggleButton.addEventListener("click", () => {
 modeInputs.forEach((input) => {
   input.addEventListener("change", (event) => {
     state.scrollMode = event.target.value;
+    computeLines();
     render();
   });
 });
@@ -561,3 +691,17 @@ buildBookOptions();
 buildParshaOptionsForBook(state.bookIndex);
 buildAliyaOptions(8);   // placeholder until a parsha is loaded
 activateAliyaMode(state.parshaIndex, 0);
+
+// Recompute line-breaks after fonts load (SeferSTaM may not be ready on first render)
+document.fonts.ready.then(() => {
+  if (state.verses.length > 0) { computeLines(); render(); }
+});
+
+// Recompute on resize (column width changes)
+let _resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(() => {
+    if (state.verses.length > 0) { computeLines(); render(); }
+  }, 200);
+});
